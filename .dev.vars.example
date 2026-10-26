@@ -1,0 +1,5 @@
+# Local `wrangler dev` only. `npm run setup` writes the real secrets.
+# MAIL_DOMAIN must match mailDomain in bot-mail.config.json.
+MAIL_DOMAIN=bot.example.email
+ADMIN_API_KEY=replace-with-a-long-random-admin-key
+DATA_KEY=replace-with-a-long-random-data-key

@@ -1,0 +1,50 @@
+{
+  "name": "bot-mail",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "BotMail: self-hosted bot mailboxes on Cloudflare Workers. Group settings come from bot-mail.config.json.",
+  "scripts": {
+    "config": "node scripts/render-wrangler.mjs",
+    "setup": "node scripts/setup.mjs",
+    "setup:staging": "BOT_MAIL_CONFIG=bot-mail.staging.json node scripts/setup.mjs",
+    "dev": "npm run build && node scripts/render-wrangler.mjs && wrangler dev",
+    "deploy": "npm run build && node scripts/render-wrangler.mjs && npm run db:migrate:remote && wrangler deploy",
+    "deploy:staging": "npm run build && BOT_MAIL_CONFIG=bot-mail.staging.json node scripts/render-wrangler.mjs && BOT_MAIL_CONFIG=bot-mail.staging.json npm run db:migrate:remote && wrangler deploy",
+    "route:staging": "BOT_MAIL_CONFIG=bot-mail.staging.json node scripts/setup.mjs --route",
+    "cf-typegen": "wrangler types",
+    "typecheck": "tsc --noEmit && tsc -p test --noEmit && tsc -p dashboard --noEmit",
+    "test": "npm run build && vitest run && vitest run --config vitest.node.config.ts",
+    "bot:add": "node scripts/bot-add.mjs",
+    "attachments:backfill": "node scripts/backfill-attachments.mjs",
+    "db:migrate:local": "node scripts/migrate.mjs --local",
+    "db:migrate:remote": "node scripts/migrate.mjs --remote",
+    "build": "vite build --config dashboard/vite.config.ts"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "agents": "^0.27.0",
+    "postal-mime": "^2.7.5",
+    "tldts": "7.4.19",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/geist-mono": "^5.3.0",
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.4",
+    "preact": "^11.0.1",
+    "typescript": "^5.9.2",
+    "vite": "^8.3.4",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.113.0"
+  }
+}

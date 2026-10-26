@@ -1,0 +1,46 @@
+// Copy to bot-mail.config.json and fill in the zone you bought.
+// Nothing in this file is compiled into the Worker. `npm run setup` reads it.
+{
+  "brandName": "BotMail",
+  "workerName": "bot-mail",
+  "mailZone": "example.email",
+  // The default mail domain. Add more domains at runtime on the dashboard Domains page.
+  "mailDomain": "bot.example.email",
+  // Dashboard hostname. Cloudflare Access protects this name. Leave empty to skip Access setup.
+  "adminHost": "mail-admin.example.email",
+  // HTTPS host bots use for /mcp. Do not put the Access-protected admin host here.
+  // When this is a workers.dev name, setup keeps workers_dev on. A custom adminHost
+  // would otherwise make Wrangler disable that hostname (Error 1042 on /mcp).
+  "publicHost": "bot-mail.example.workers.dev",
+  "r2Bucket": "bot-mail",
+  "d1Name": "bot-mail",
+  // approval holds mail outside the mail domain and allowlist until someone approves it on the dashboard.
+  // direct sends every recipient immediately. Use it only when an upstream gate
+  // already reviews outbound mail.
+  "sendPolicy": "approval",
+  "sendAllowlist": [],
+  // Messages from one sender to one mailbox each hour. The rest are quarantined as "rate limited".
+  "inboundRateLimit": 20,
+  // Cloudflare X-Cf-Spamh-Score at or above this value (1-5) goes to Junk instead of the inbox.
+  // "off" stores the score and leaves the message in the inbox. Default 4. Quarantine still wins.
+  "spamScoreThreshold": 4,
+  // Stamped messages from one sender to one mailbox each hour, including mail a person asked for.
+  "inboundBotRateLimit": 30,
+  // Bot sends to one BotMail mailbox inside inboundAutoReplyWindow seconds.
+  // A dashboard approval or approve_draft does not count. The automated flag does not exempt a send.
+  "inboundAutoReplyLimit": 20,
+  "inboundAutoReplyWindow": 3600,
+  // Stamped BotMail recipients one bot may send in a day, including dashboard approvals.
+  "outboundDailyStampLimit": 200,
+  // true: a bot name (the part before @) can exist on one domain only, so there is never a second "rating".
+  // false: rating@bot.example.email and rating@bot.other.email can both exist. The dashboard can override this.
+  "uniqueBotNames": true,
+  "access": {
+    "teamDomain": "",
+    "allowedEmailDomains": ["example.com"]
+  },
+  "branding": {
+    "logo": "",
+    "accent": "#7aa2ff"
+  }
+}

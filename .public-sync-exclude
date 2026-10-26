@@ -1,0 +1,4 @@
+# Paths left out of the public snapshot, one repo-relative path per line.
+# A path drops that file and anything under it. Lines starting with # are comments.
+# The sync workflow stays in this private repository.
+.github/workflows/public-sync.yml

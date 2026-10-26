@@ -1,0 +1,36 @@
+#!/bin/sh
+# Fallback stdio bridge. Remote custom connectors are the primary path.
+# Reads one bot key from a mode 600 secrets file and execs mcp-remote.
+# The key is never printed.
+set -eu
+
+if [ "${1:-}" = "" ] || [ "${2:-}" = "" ]; then
+  echo "Usage: bin/botmail-mcp <bot-id> <mcp-https-url>" >&2
+  exit 1
+fi
+
+BOT="$1"
+URL="$2"
+SECRETS="${BOTMAIL_SECRETS:-.bot-mail.secrets}"
+
+if [ ! -f "$SECRETS" ]; then
+  echo "Missing $SECRETS. Run npm run bot:add -- $BOT or copy the key from the Connect panel into that file." >&2
+  exit 1
+fi
+
+MODE=$(stat -c %a "$SECRETS" 2>/dev/null || stat -f %OLp "$SECRETS")
+case "$MODE" in
+  600|400) ;;
+  *)
+    echo "$SECRETS must be mode 600 before this bridge will read it (found $MODE)." >&2
+    exit 1
+    ;;
+esac
+
+KEY=$(awk -F= -v id="$BOT" '$1 == id { print substr($0, index($0, "=") + 1); exit }' "$SECRETS")
+if [ -z "$KEY" ]; then
+  echo "No key for $BOT in $SECRETS." >&2
+  exit 1
+fi
+
+exec npx -y mcp-remote "$URL" --header "Authorization: Bearer ${KEY}"

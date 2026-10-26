@@ -1,0 +1,16 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+bot-mail.config.json
+bot-mail.state.json
+bot-mail.staging.state.json
+*.state.json
+.bot-mail.secrets
+.bot-mail.staging.secrets
+wrangler.jsonc
+dist/
+coverage/
+*.log
+.DS_Store
+dashboard/dist/

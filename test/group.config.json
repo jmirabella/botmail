@@ -1,0 +1,17 @@
+{
+  "brandName": "BotMail",
+  "workerName": "bot-mail",
+  "mailZone": "example.test",
+  "mailDomain": "bots.example.test",
+  "r2Bucket": "bot-mail-test",
+  "d1Name": "bot-mail-test",
+  "sendPolicy": "approval",
+  "sendAllowlist": [],
+  "adminHost": "mail-admin.example.test",
+  "publicHost": "bot-mail.example.workers.dev",
+  "access": {
+    "teamDomain": "exampleteam",
+    "aud": "aud-test",
+    "allowedEmailDomains": ["example.com"]
+  }
+}

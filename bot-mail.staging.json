@@ -1,0 +1,29 @@
+// Staging install. setup:staging, deploy:staging, and route:staging read this file by name.
+// Replace the placeholders before a live run. Commit only placeholder hostnames and team names.
+{
+  "brandName": "BotMail Staging",
+  "workerName": "bot-mail-staging",
+  "mailZone": "example.email",
+  "mailDomain": "staging.example.email",
+  "adminHost": "staging-admin.example.email",
+  "publicHost": "staging-mcp.example.email",
+  "r2Bucket": "bot-mail-staging",
+  "d1Name": "bot-mail-staging",
+  "sendPolicy": "approval",
+  "sendAllowlist": [],
+  "outboundAllowlistOnly": true,
+  "routing": "literal",
+  "inboundRateLimit": 20,
+  "spamScoreThreshold": 4,
+  "uniqueBotNames": true,
+  "workersDev": true,
+  "access": {
+    // Team label before .cloudflareaccess.com. The application audience stays in the state file as accessAud.
+    "teamDomain": "your-team",
+    "allowedEmailDomains": ["example.com"]
+  },
+  "branding": {
+    "logo": "",
+    "accent": "#7aa2ff"
+  }
+}
