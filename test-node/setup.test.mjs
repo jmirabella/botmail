@@ -10,6 +10,7 @@ import {
   assertSupportedNode,
   defaultDomainStatements,
   describePlan,
+  describePublicHostAttachment,
   ensureAccessApplication,
   manualFallbacks,
   runSetup,
@@ -96,7 +97,183 @@ describe("generated wrangler config", () => {
     expect(off).toContain('"workers_dev": false');
     expect(workersDevEnabled({ publicHost: "bot-mail.example.workers.dev", workersDev: false })).toBe(true);
   });
+
+  it("emits a custom publicHost domain for catch-all, and skips workers.dev and the admin host", () => {
+    const group = loadGroupConfig(path.join(root, "test/group.config.json"));
+    const catchAll = validateGroupConfig({ ...group, routing: "catch-all", publicHost: "mcp.example.test" });
+    const routes = wranglerRoutes(renderWrangler(catchAll, "11111111-1111-1111-1111-111111111111"));
+    expect(routes).toEqual([
+      { pattern: "mail-admin.example.test", custom_domain: true },
+      { pattern: "mcp.example.test", custom_domain: true },
+    ]);
+    expect(describePlan(catchAll).join("\n")).toContain(
+      "Worker custom domain: POST /accounts/{account_id}/workers/domains hostname mcp.example.test service bot-mail",
+    );
+
+    const literal = validateGroupConfig({ ...catchAll, routing: "literal" });
+    expect(wranglerRoutes(renderWrangler(literal, "11111111-1111-1111-1111-111111111111"))).toEqual(routes);
+
+    const workersDev = validateGroupConfig({ ...group, publicHost: "bot-mail.example.workers.dev" });
+    expect(wranglerRoutes(renderWrangler(workersDev, "11111111-1111-1111-1111-111111111111")).map((route) => route.pattern)).not.toContain(
+      "bot-mail.example.workers.dev",
+    );
+    expect(describePlan(workersDev).join("\n")).not.toContain("hostname bot-mail.example.workers.dev");
+
+    const sameHost = validateGroupConfig({ ...group, publicHost: "mail-admin.example.test" });
+    expect(wranglerRoutes(renderWrangler(sameHost, "11111111-1111-1111-1111-111111111111"))).toEqual([
+      { pattern: "mail-admin.example.test", custom_domain: true },
+    ]);
+    expect(describePlan(sameHost).join("\n").match(/hostname mail-admin.example.test/g)).toHaveLength(1);
+  });
 });
+
+function wranglerRoutes(text) {
+  const parsed = JSON.parse(text.slice(text.indexOf("{")));
+  return parsed.routes ?? [];
+}
+
+describe("custom publicHost on an existing hostname", () => {
+  const config = {
+    workerName: "bot-mail",
+    adminHost: "mail-admin.example.test",
+    publicHost: "mcp.example.test",
+    routing: "catch-all",
+  };
+
+  it("names a conflicting route or DNS record and leaves a host this Worker already serves", () => {
+    const served = describePublicHostAttachment(config, {
+      routes: [
+        { pattern: "other.example.test/*", script: "bot-mail" },
+        { pattern: "mcp.example.test/*", script: "bot-mail" },
+      ],
+      records: [{ type: "AAAA", name: "mcp.example.test", content: "100::", proxied: true }],
+    });
+    expect(served.omitRoute).toBe(true);
+    expect(served.attach).toBe(false);
+    const servedText = served.lines.join("\n");
+    expect(servedText).toContain("already served by this Worker");
+    expect(servedText).toContain("mcp.example.test/*");
+    expect(servedText).toContain("100::");
+    expect(servedText).toContain("will not delete");
+    expect(servedText).not.toContain("other.example.test");
+
+    const conflict = describePublicHostAttachment(config, {
+      routes: [{ pattern: "mcp.example.test/*", script: "other-worker" }],
+      records: [{ type: "AAAA", name: "mcp.example.test.", content: "100::", proxied: true }],
+    });
+    expect(conflict.omitRoute).toBe(true);
+    expect(conflict.attach).toBe(false);
+    const conflictText = conflict.lines.join("\n");
+    expect(conflictText).toContain("was not attached");
+    expect(conflictText).toContain("other-worker");
+    expect(conflictText).toContain("AAAA");
+    expect(conflictText).toContain("will not delete");
+
+    const dnsOnly = describePublicHostAttachment(config, {
+      records: [{ type: "AAAA", name: "mcp.example.test", content: "100::", proxied: true }],
+    });
+    expect(dnsOnly.omitRoute).toBe(true);
+    expect(dnsOnly.lines.join("\n")).toContain("Remove the AAAA record for mcp.example.test");
+
+    const attached = describePublicHostAttachment(config, {
+      domains: [{ hostname: "mcp.example.test", service: "bot-mail" }],
+      records: [{ type: "AAAA", name: "mcp.example.test", content: "100::", proxied: true }],
+    });
+    expect(attached).toEqual({ omitRoute: false, attach: true, lines: [] });
+
+    expect(describePublicHostAttachment(config, {})).toEqual({ omitRoute: false, attach: true, lines: [] });
+    expect(describePublicHostAttachment({ ...config, publicHost: "bot-mail.example.workers.dev" }, {})).toEqual({
+      omitRoute: false,
+      attach: false,
+      lines: [],
+    });
+  });
+
+  it("deploys a free catch-all host and skips one this Worker already serves", async () => {
+    const group = validateGroupConfig({
+      ...loadGroupConfig(path.join(root, "test/group.config.json")),
+      publicHost: "mcp.example.test",
+      routing: "catch-all",
+    });
+    const served = await runPublicHost(group, {
+      routes: [{ pattern: "mcp.example.test/*", script: group.workerName }],
+      records: [{ type: "AAAA", name: "mcp.example.test", content: "100::", proxied: true }],
+    });
+    expect(served.result.ok).toBe(true);
+    const servedText = served.lines.join("\n");
+    expect(servedText).toContain("already served by this Worker");
+    expect(servedText).toContain("Worker route mcp.example.test/* sends to bot-mail");
+    expect(servedText).toContain("Proxied AAAA record 100::");
+    expect(servedText).toContain("will not delete them");
+    expect(served.wrangler).not.toContain('"pattern": "mcp.example.test"');
+    expect(served.wrangler).toContain('"PUBLIC_HOST": "mcp.example.test"');
+    expect(domainPosts(served.calls)).not.toContain("mcp.example.test");
+    expect(served.calls.some((call) => call.method === "DELETE")).toBe(false);
+
+    const clear = await runPublicHost(group, {});
+    expect(clear.result.ok).toBe(true);
+    expect(clear.wrangler).toContain('"pattern": "mcp.example.test"');
+    expect(clear.wrangler).toContain('"custom_domain": true');
+    expect(domainPosts(clear.calls)).toContain("mcp.example.test");
+    expect(clear.lines.join("\n")).toContain("custom domain mcp.example.test attached");
+    expect(clear.calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+});
+
+function domainPosts(calls) {
+  return calls
+    .filter((call) => call.method === "POST" && call.requestPath.includes("/workers/domains"))
+    .map((call) => call.body?.hostname);
+}
+
+async function runPublicHost(group, extra) {
+  const directory = mkdtempSync(path.join(tmpdir(), "bot-mail-host-"));
+  const lines = [];
+  const calls = [];
+  try {
+    const result = await runSetup({
+      config: group,
+      token: "token",
+      accountId: "account",
+      env: {},
+      lines,
+      secretsPath: path.join(directory, "saved.secrets"),
+      statePath: path.join(directory, "state.json"),
+      wranglerPath: path.join(directory, "wrangler.jsonc"),
+      tempDir: directory,
+      io: { write() {} },
+      nodeVersion: "22.14.0",
+      buildDashboard: () => ({ code: 0, stdout: "", stderr: "" }),
+      wrangler(args) {
+        if (args[0] === "d1" && args[1] === "info") {
+          return { code: 0, stdout: '{"uuid":"11111111-1111-1111-1111-111111111111"}', stderr: "" };
+        }
+        if (args[0] === "kv" && args[1] === "namespace" && args[2] === "create") {
+          return { code: 0, stdout: '{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}', stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      request(method, requestPath, body) {
+        calls.push({ method, requestPath, body });
+        if (requestPath.startsWith("/zones?")) return [{ id: "zone1", name: group.mailZone, status: "active" }];
+        if (requestPath.endsWith("/email/routing") && !requestPath.includes("/rules")) return { enabled: true, support_subaddress: true };
+        if (requestPath.endsWith("/email/sending/subdomains")) return [{ name: group.mailDomain, enabled: true }];
+        if (requestPath.endsWith("/secrets")) return [{ name: "ADMIN_API_KEY" }, { name: "DATA_KEY" }, { name: "MAIL_DOMAIN" }];
+        if (requestPath.endsWith("/rules/catch_all")) return { enabled: true, actions: [{ type: "worker", value: [group.workerName] }] };
+        if (requestPath.endsWith("/query")) return [{ results: [] }];
+        if (requestPath.endsWith("/workers/subdomain")) return { subdomain: "example" };
+        if (requestPath.includes("/workers/domains") && method === "GET") return extra.domains ?? [];
+        if (requestPath.includes("/workers/routes")) return extra.routes ?? [];
+        if (requestPath.includes("/dns_records") && requestPath.includes("mcp.example.test")) return extra.records ?? [];
+        if (requestPath.includes("/workers/domains") && method === "POST") return { hostname: body?.hostname };
+        return [];
+      },
+    });
+    return { result, calls, lines, wrangler: readFileSync(path.join(directory, "wrangler.jsonc"), "utf8") };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 describe("setup leaves mailboxes alone", () => {
   it("ignores a bots list and does not plan mailbox changes", () => {

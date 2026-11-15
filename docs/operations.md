@@ -65,7 +65,7 @@ Copy `bot-mail.config.example.jsonc` to `bot-mail.config.json`. Nothing in that 
 | `outboundDailyStampLimit` | Stamped BotMail recipients one bot may send in a day, including dashboard approvals. Integer 1–10000. Default 200. |
 | `uniqueBotNames` | Default `true`. One local-part across domains. |
 | `adminHost` | Dashboard hostname. Empty skips Access, and the dashboard is not served. Must be the zone or a subdomain of it. |
-| `publicHost` | Hostname for `/mcp`. Not `adminHost`. A `*.workers.dev` name forces `workers_dev` on. |
+| `publicHost` | Hostname for `/mcp`. Not `adminHost`. A custom name is attached as a Worker custom domain for both catch-all and literal routing. A `*.workers.dev` name forces `workers_dev` on. |
 | `workersDev` | Keep the workers.dev hostname. Default `true`. |
 | `access.teamDomain` | Access team label, the part before `.cloudflareaccess.com`. |
 | `access.aud` | Leave empty. Setup stores the audience in the state file. |
@@ -92,7 +92,8 @@ The zone must already be on this Cloudflare account. Setup looks it up with `GET
 7. Applies D1 migrations, then marks `mailDomain` as the default domain. It does not insert or update mailboxes, keys, webhooks, routes, notes, or mail. On the first deploy it writes `ADMIN_API_KEY`, `DATA_KEY`, and `MAIL_DOMAIN` and deploys with those secrets. A later run does not generate new keys when `ADMIN_API_KEY` and `DATA_KEY` are already on the Worker. `CF_API_TOKEN` is uploaded when a domains token is available and the secret is missing, or when you pass `--rotate-secrets`.
 8. Deploys, then points the zone catch-all at the Worker. When the rule already sends to this Worker, setup leaves it. When it already sends to a different Worker, setup stops unless you passed `--force-catch-all`. Setup never deletes a routing rule. The generated `wrangler.jsonc` has no Email Routing `addresses`, so a rerun does not fight that rule. `routing: "literal"` skips this step and writes one literal rule per mailbox instead. See [Staging](#staging).
 9. When `adminHost` is set, creates or updates a self-hosted Access application and an allow policy for `access.allowedEmailDomains`, stores the app id and audience in `bot-mail.state.json`, and attaches that hostname as a Worker custom domain. A 403 from the Access API prints a warning and names the two Access permissions. The Worker still does not render the dashboard.
-10. Prints the MCP URL, the dashboard URL, and tells you to add mailboxes there. The admin key is printed only when it was just created.
+10. When `publicHost` is a custom hostname, attaches it as a Worker custom domain the same way, for both `catch-all` and `literal` routing. A `*.workers.dev` name and a `publicHost` equal to `adminHost` are left out. The generated `wrangler.jsonc` lists the hostname with `custom_domain: true`. If a Worker route or DNS record already exists on that hostname, setup leaves both in place, prints what is there and what to remove, and leaves the custom domain out of this deploy. It does not delete the route or the record. A hostname that already routes to this Worker is skipped the same way. A hostname that is already a custom domain on this Worker stays on the Worker.
+11. Prints the MCP URL, the dashboard URL, and tells you to add mailboxes there. The admin key is printed only when it was just created.
 
 ```sh
 npm run setup -- --dry-run       # print the plan; no Cloudflare calls
@@ -134,6 +135,8 @@ Workers Builds does not have this config unless you provide it. For a Git deploy
 Both commands read `accessAud` and `accountId` from the state file (`bot-mail.state.json` or `bot-mail.staging.state.json`) and write them as `CF_ACCESS_AUD` and `CF_ACCOUNT_ID`. If the audience is not in the state file, `access.aud` in the group config is used. If it is still missing, deploy stops. An empty audience makes the admin dashboard return 401 after Access sign-in.
 
 `npm run deploy` does not call the routing API. Routing changes happen in `npm run setup` or `npm run route:staging`.
+
+`npm run deploy` does rewrite `wrangler.jsonc` with a custom domain for `publicHost` when that name is custom. It does not look for an existing Worker route or DNS record. An install that attached the MCP host by hand should remove that route and DNS record before the next deploy. `npm run setup` reports them and leaves them in place. Wrangler can replace a conflicting DNS record when the deploy is not interactive.
 
 ## Staging
 
@@ -421,6 +424,8 @@ npm run setup
 
 Use the current UTC time and save the bookmark the command prints. A rerun updates the Worker, applies migrations, and rewrites config vars. It does not insert, update, or delete mailboxes, keys, webhooks, routes, notes, or mail. It does not rotate `ADMIN_API_KEY` or `DATA_KEY` when those secrets are already on the Worker.
 
+A custom `publicHost` is now attached for catch-all installs as well as literal ones. If that hostname was attached by hand, with a Worker route such as `<your-botmail-host>/*` and a proxied DNS record, run `npm run setup`. It names that route and that DNS record, leaves both in place, and does not add the custom domain on this run. Remove them yourself, then run setup again. Until they are gone, `npm run deploy` writes the custom domain into `wrangler.jsonc` and Wrangler can conflict with them. Setup will not delete them. A hostname that is already a custom domain on this Worker is left as it is.
+
 `npm run setup -- --rotate-secrets` replaces those two secrets. After a new `DATA_KEY`, save each Routine Webhook key again. A stamp written with the old key no longer verifies. If the From is a BotMail domain, that in-flight message is quarantined as unstamped internal sender.
 
 To restore the bookmark you saved:
@@ -444,6 +449,7 @@ npx wrangler d1 time-travel restore <d1-name> --bookmark <bookmark>
 The short table is in [the README](../README.md#troubleshooting). A few longer causes:
 
 - **Catch-all already points at another Worker.** Setup stops and names that Worker. Pass `--force-catch-all` only when this install should take the apex catch-all. Staging uses literal rules and should not pass that flag.
+- **`publicHost` already has a Worker route or DNS record.** Setup names the route pattern and the record, then leaves both in place. Remove them in the dashboard (Workers → the script → Settings → Domains & Routes, and the zone DNS page), then run setup again. Setup does not delete them. `npm run deploy` writes the custom domain into `wrangler.jsonc` and can conflict with what is still there.
 - **Subdomain mail never arrives.** Enable the `mailDomain` label under **Email Routing → Settings → Subdomains**. A catch-all exists only for the apex. A literal install needs one rule per address (`npm run route:staging` or `bot:add` with `BOT_MAIL_CONFIG` set).
 - **Reads fail immediately after deploy.** The Worker is selecting a column the database does not have yet. Run `npm run db:migrate:remote` for that install, then deploy again. `0021` is required for `owner_email`. `0022` is required for `removed_at`.
 - **A mailbox is missing on the Connect page.** It already has a connection, or it is disabled or archived. Revoke the connector on the bot page. An approval that was never exchanged expires after about 10 minutes and does not hide the mailbox.
@@ -459,7 +465,7 @@ Setup prints these and continues when the API cannot finish the step:
 - Catch-all, if the API call fails: **Email Routing → the zone → Routing rules → Catch-all address**, action **Send to a Worker**, choose `workerName`. Do not add `addresses` to `wrangler.jsonc`.
 - Plus-addressing: **Email Routing → Settings** if the settings update fails.
 - Access, when `adminHost` is set: **Zero Trust → Access → Applications → Add a self-hosted application** for that hostname. Policy Allow, include each `access.allowedEmailDomains` entry. Copy the application audience into the state file as `accessAud` and run setup or deploy again so the Worker var matches. Deploy reads `accessAud` and `accountId` from that state file and stops if the audience is still empty.
-- Custom domain: **Workers → the script → Settings → Domains & Routes → Add** `adminHost`.
+- Custom domain: **Workers → the script → Settings → Domains & Routes → Add** `adminHost`. A custom `publicHost` uses the same control, for both catch-all and literal routing. If a Worker route or DNS record is already on that hostname, remove it yourself. Setup will not delete it.
 
 Reference: [Email Routing enable](https://developers.cloudflare.com/api/resources/email_routing/methods/enable/), [catch-all update](https://developers.cloudflare.com/api/resources/email_routing/subresources/rules/subresources/catch_alls/methods/update/), [routing DNS](https://developers.cloudflare.com/api/resources/email_routing/subresources/dns/methods/create/), [subdomains](https://developers.cloudflare.com/email-service/configuration/subdomains/), [sending subdomains](https://developers.cloudflare.com/api/resources/email_sending/subresources/subdomains/methods/create/), [Worker secrets](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/secrets/methods/update/), [static assets](https://developers.cloudflare.com/workers/static-assets/).
 

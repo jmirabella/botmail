@@ -9,6 +9,14 @@ export function workersDevEnabled(config) {
   return true;
 }
 
+/** Custom MCP hostname to attach as a Worker custom domain, for catch-all and literal routing. */
+export function customPublicHost(config) {
+  const host = String(config?.publicHost || "").trim().toLowerCase();
+  if (!host || host.endsWith(".workers.dev")) return "";
+  if (host === String(config?.adminHost || "").trim().toLowerCase()) return "";
+  return host;
+}
+
 export function renderWrangler(config, databaseId, extras = {}) {
   const access = config.access ?? {};
   const branding = config.branding ?? {};
@@ -78,15 +86,9 @@ export function renderWrangler(config, databaseId, extras = {}) {
   };
   const routes = [];
   if (config.adminHost) routes.push({ pattern: config.adminHost, custom_domain: true });
-  // Literal installs use their own hostname for /mcp. Catch-all installs are unchanged.
-  if (
-    config.routing === "literal" &&
-    config.publicHost &&
-    !config.publicHost.endsWith(".workers.dev") &&
-    config.publicHost !== config.adminHost
-  ) {
-    routes.push({ pattern: config.publicHost, custom_domain: true });
-  }
+  // A custom publicHost is the MCP hostname in both catch-all and literal routing.
+  const mcpHost = customPublicHost(config);
+  if (mcpHost && !extras.omitPublicHostRoute) routes.push({ pattern: mcpHost, custom_domain: true });
   if (routes.length > 0) document.routes = routes;
   const routingNote = config.routing === "literal"
     ? `// No Email Routing addresses on purpose: setup writes literal rules for ${config.mailDomain} through the API and never changes the *@${config.mailZone} catch-all.`

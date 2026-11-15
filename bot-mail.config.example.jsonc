@@ -9,6 +9,7 @@
   // Dashboard hostname. Cloudflare Access protects this name. Leave empty to skip Access setup.
   "adminHost": "mail-admin.example.email",
   // HTTPS host bots use for /mcp. Do not put the Access-protected admin host here.
+  // A custom name is attached as a Worker custom domain for catch-all and literal routing.
   // When this is a workers.dev name, setup keeps workers_dev on. A custom adminHost
   // would otherwise make Wrangler disable that hostname (Error 1042 on /mcp).
   "publicHost": "bot-mail.example.workers.dev",

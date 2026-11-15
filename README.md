@@ -48,7 +48,7 @@ npm run setup -- --dry-run
 npm run setup
 ```
 
-`bot-mail.config.json` and `.env` are gitignored. `--dry-run` prints the plan and makes no Cloudflare calls. The live command creates the R2 bucket and D1 database if they are missing, builds the dashboard, enables Email Routing and Email Sending, applies migrations, deploys, points the zone catch-all at the Worker, and, when `adminHost` is set, creates the Access application. If that catch-all already sends to a different Worker, setup stops unless you pass `--force-catch-all`. It does not delete routing rules.
+`bot-mail.config.json` and `.env` are gitignored. `--dry-run` prints the plan and makes no Cloudflare calls. The live command creates the R2 bucket and D1 database if they are missing, builds the dashboard, enables Email Routing and Email Sending, applies migrations, deploys, points the zone catch-all at the Worker, and, when `adminHost` is set, creates the Access application. If that catch-all already sends to a different Worker, setup stops unless you pass `--force-catch-all`. It does not delete routing rules. A custom `publicHost` is attached as a Worker custom domain for both catch-all and literal routing. If that hostname already has a Worker route or DNS record, setup leaves it in place and prints what to remove.
 
 When it finishes it prints the MCP URL, the dashboard URL, and `ADMIN_API_KEY` once if it just generated that key. Copy the key into a password manager. Setup also writes `ADMIN_API_KEY` and `DATA_KEY` to `.bot-mail.secrets`. Run `chmod 600 .bot-mail.secrets` and keep a copy offline.
 
@@ -144,7 +144,7 @@ Copy `bot-mail.config.example.jsonc` to `bot-mail.config.json`. Examples below a
 | `outboundDailyStampLimit` | Stamped BotMail recipients one bot may send in a day, including dashboard approvals. Integer from 1 to 10000. | `200` | No. Default `200` |
 | `uniqueBotNames` | `true` allows a local-part on one domain only. | `true` | No. Default `true` |
 | `adminHost` | Dashboard hostname. Empty skips Access, and the dashboard is not served. | `mail-admin.example.email` | Required for a dashboard |
-| `publicHost` | Hostname bots use for `/mcp`. Not `adminHost`. A `*.workers.dev` name forces `workers_dev` on. | `<your-botmail-host>` | Set it before bots connect |
+| `publicHost` | Hostname bots use for `/mcp`. Not `adminHost`. A custom name is attached as a Worker custom domain for both catch-all and literal routing. A `*.workers.dev` name forces `workers_dev` on. | `<your-botmail-host>` | Set it before bots connect |
 | `workersDev` | Keep the workers.dev hostname. | `true` | No. Default `true` |
 | `access.teamDomain` | Access team label. | `your-team` | Required for the dashboard lock |
 | `access.aud` | Leave empty. Setup stores the application audience. | `""` | No |
@@ -230,6 +230,7 @@ Use the current UTC time and save the bookmark the command prints. A rerun updat
 | The dashboard has no Access sign-in, or every page says Access required. | Add **Access: Apps and Policies Edit** and **Access: Organizations Read**, set `adminHost`, `access.teamDomain`, and `access.allowedEmailDomains`, and run setup again. Sign in with an allowed email. |
 | The dashboard returns 401 after Access sign-in. | `CF_ACCESS_AUD` was empty. Setup stores the audience as `accessAud` in the state file. Deploy reads that value (or `access.aud` in the group config) and refuses to publish a Worker without it. |
 | `https://<your-botmail-host>/mcp` returns Error 1042. | `publicHost` is not a `*.workers.dev` name and `workersDev` is false, so the workers.dev hostname was turned off. Set `publicHost` to `<worker>.<account-subdomain>.workers.dev` and run setup again. |
+| Setup says `publicHost` already has a Worker route or DNS record. | Remove the route and DNS record it names, then run setup again. Setup does not delete them. Leave them in place until then: `npm run deploy` writes the custom domain into `wrangler.jsonc` and Wrangler can conflict with the existing route or record. |
 | The connector is rejected, or the wake uses the wrong credential. | Use the shared BotMail connector at `https://<your-botmail-host>/mcp` with no headers. The account name is the mailbox id. Save the Routine Webhook key from the bot's shell. Do not paste it into the connector, and do not pass a masked secret into an MCP tool argument. |
 | A setup link opens the wrong field. | Copy the Webhook URL and Webhook key links from the latest status reminder. If that reminder has no field links yet, build both from the folder id in the routine save result (`folder <id>`). |
 | Mail arrives and the bot does not wake. | On the bot page, URL set and Key set both need to be Yes. Press **Send test wake**. The setup code expires in 10 minutes, works once, and the POST is rate-limited. |

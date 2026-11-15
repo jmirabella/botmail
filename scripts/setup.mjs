@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadDotEnv, loadGroupConfig, mailDomainLabel, pathsForConfig } from "./group-config.mjs";
-import { renderWrangler, resolveInstallBindings } from "./render-wrangler.mjs";
+import { customPublicHost, renderWrangler, resolveInstallBindings } from "./render-wrangler.mjs";
 
 export { loadDotEnv };
 
@@ -57,14 +57,10 @@ export function describePlan(config) {
       `Worker custom domain: POST /accounts/{account_id}/workers/domains hostname ${config.adminHost} service ${config.workerName}`,
     );
   }
-  if (
-    config.routing === "literal" &&
-    config.publicHost &&
-    !config.publicHost.endsWith(".workers.dev") &&
-    config.publicHost !== config.adminHost
-  ) {
+  const mcpHost = customPublicHost(config);
+  if (mcpHost) {
     lines.push(
-      `Worker custom domain: POST /accounts/{account_id}/workers/domains hostname ${config.publicHost} service ${config.workerName}`,
+      `Worker custom domain: POST /accounts/{account_id}/workers/domains hostname ${mcpHost} service ${config.workerName}`,
     );
   }
   return lines;
@@ -122,6 +118,12 @@ export function manualFallbacks(config) {
     steps.push(
       `If the Access API fails: Zero Trust → Access → Applications → Add a self-hosted application for ${config.adminHost}. Policy Allow, include email domain ${domains}. Copy the application AUD into bot-mail.state.json as accessAud and re-run setup.`,
       `If the custom domain API fails: Workers → ${config.workerName} → Settings → Domains & Routes → Add ${config.adminHost}.`,
+    );
+  }
+  const mcpHost = customPublicHost(config);
+  if (mcpHost) {
+    steps.push(
+      `If ${mcpHost} already has a Worker route or DNS record, setup leaves it in place and prints what to remove. It does not delete routes or DNS records.`,
     );
   }
   return steps;
@@ -252,7 +254,11 @@ export async function runSetup(options) {
     `${JSON.stringify({ ...install, accessAud: extras.accessAud || "", accountId: extras.accountId || accountId }, null, 2)}\n`,
   );
   const wranglerPath = options.wranglerPath ?? "wrangler.jsonc";
-  writeFileSync(wranglerPath, renderWrangler(config, databaseId, extras));
+  const publicHostPlan = await planPublicHost(options, config, zone, say);
+  writeFileSync(
+    wranglerPath,
+    renderWrangler(config, databaseId, { ...extras, omitPublicHostRoute: publicHostPlan.omitRoute }),
+  );
   say(`wrote ${wranglerPath}`);
   const built = await (options.buildDashboard ?? buildDashboard)();
   if (built.code !== 0) throw new Error(`dashboard build failed: ${built.stderr || built.stdout}`);
@@ -333,7 +339,7 @@ export async function runSetup(options) {
       say(`manual: ${manual.find((step) => step.includes("Domains")) || "attach the admin hostname on the Worker"}`);
     }
   }
-  await ensurePublicHost(options, config, say);
+  await ensurePublicHost(options, config, say, publicHostPlan);
   const issued = prepared.issued;
   if (options.rotateKeys) say("Bot API keys are minted on the dashboard or by the admin MCP. Setup does not rotate them.");
   const origin = await workerOrigin(options, config, say);
@@ -891,14 +897,152 @@ async function ensureWorkerDomain(options, config, say, hostname = config.adminH
   }
 }
 
-async function ensurePublicHost(options, config, say) {
-  if (config.routing !== "literal" || !config.publicHost) return;
-  if (config.publicHost.endsWith(".workers.dev") || config.publicHost === config.adminHost) return;
+/**
+ * How setup should treat a custom publicHost given the Worker custom domains, routes, and DNS
+ * records already on that hostname. Never plans a delete.
+ * `omitRoute` keeps the custom domain out of this deploy so Wrangler does not fight an existing route or record.
+ */
+export function describePublicHostAttachment(config, { domains = [], routes = [], records = [] } = {}) {
+  const host = customPublicHost(config);
+  if (!host) return { omitRoute: false, attach: false, lines: [] };
+  const domain = (Array.isArray(domains) ? domains : []).find((row) => sameHost(row?.hostname, host));
+  if (domain) {
+    const service = String(domain.service || domain.service_name || "").trim();
+    if (!service || service === config.workerName) return { omitRoute: false, attach: true, lines: [] };
+    return {
+      omitRoute: true,
+      attach: false,
+      lines: [
+        `${host} was not attached. It is already a custom domain on ${service}.`,
+        `Remove that custom domain from ${service} (Workers → ${service} → Settings → Domains & Routes), then run setup again. Setup will not delete it.`,
+      ],
+    };
+  }
+  const matchingRoutes = (Array.isArray(routes) ? routes : []).filter((row) => routeTargetsHost(row?.pattern, host));
+  const matchingRecords = (Array.isArray(records) ? records : []).filter((row) => sameHost(row?.name, host));
+  if (matchingRoutes.length === 0 && matchingRecords.length === 0) return { omitRoute: false, attach: true, lines: [] };
+  const ours = matchingRoutes.filter((row) => routeScript(row) === config.workerName);
+  const served = ours.length === matchingRoutes.length && ours.length > 0;
+  const found = [...matchingRoutes.map((row) => describeRoute(row)), ...matchingRecords.map((row) => describeRecord(row))];
+  const remove = removalPhrase(host, matchingRoutes, matchingRecords);
+  const pronoun = matchingRoutes.length + matchingRecords.length > 1 ? "them" : "it";
+  if (served) {
+    return {
+      omitRoute: true,
+      attach: false,
+      lines: [
+        `${host} is already served by this Worker (${found.join("; ")}). Setup left it in place and did not attach a custom domain.`,
+        `Before the next deploy, remove ${remove} so Wrangler can attach ${host} as a custom domain. Setup will not delete ${pronoun}.`,
+      ],
+    };
+  }
+  return {
+    omitRoute: true,
+    attach: false,
+    lines: [
+      `${host} was not attached. ${found.join("; ")}.`,
+      `Remove ${remove}, then run setup again. Setup will not delete ${pronoun}.`,
+    ],
+  };
+}
+
+function sameHost(value, host) {
+  return String(value || "").trim().toLowerCase().replace(/\.$/, "") === host;
+}
+
+function routeTargetsHost(pattern, host) {
+  return String(pattern || "").trim().toLowerCase().split("/")[0] === host;
+}
+
+function routeScript(route) {
+  return String(route?.script || route?.script_name || "").trim();
+}
+
+function describeRoute(route) {
+  const pattern = String(route?.pattern || "").trim();
+  const script = routeScript(route);
+  return script ? `Worker route ${pattern} sends to ${script}` : `Worker route ${pattern}`;
+}
+
+function describeRecord(record) {
+  const type = String(record?.type || "DNS").toUpperCase();
+  const content = String(record?.content || "").trim();
+  const proxied = record?.proxied ? "Proxied " : "";
+  const label = content ? `${proxied}${type} record ${content}` : `${proxied}${type} record`;
+  return label;
+}
+
+function removalPhrase(host, routes, records) {
+  const parts = [];
+  if (routes.length === 1) parts.push(`the Worker route ${String(routes[0]?.pattern || host).trim()}`);
+  else if (routes.length > 1) {
+    const patterns = routes.map((route) => String(route?.pattern || "").trim()).filter(Boolean);
+    parts.push(`the Worker routes ${patterns.join(", ")}`);
+  }
+  if (records.length === 1) parts.push(`the ${String(records[0]?.type || "DNS").toUpperCase()} record for ${host}`);
+  else if (records.length > 1) parts.push(`the DNS records for ${host}`);
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return parts[0] || `the route and DNS record for ${host}`;
+}
+
+async function planPublicHost(options, config, mailZone, say) {
+  const host = customPublicHost(config);
+  if (!host) return { omitRoute: false, attach: false };
   try {
-    await ensureWorkerDomain(options, config, say, config.publicHost);
+    const decision = await inspectPublicHost(options, config, mailZone, host);
+    for (const line of decision.lines) say(line);
+    return decision;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "request failed";
+    say(`could not check ${host} for an existing route or DNS record (${message}). Setup will still try to attach it.`);
+    return { omitRoute: false, attach: true };
+  }
+}
+
+async function inspectPublicHost(options, config, mailZone, host) {
+  const listed = await cf(options, "GET", `/accounts/${options.accountId}/workers/domains?per_page=100`);
+  const domains = Array.isArray(listed) ? listed : [];
+  if (domains.some((row) => sameHost(row?.hostname, host))) return describePublicHostAttachment(config, { domains });
+  const hostZone = await zoneForHostname(options, host, mailZone);
+  if (!hostZone) {
+    return {
+      omitRoute: true,
+      attach: false,
+      lines: [
+        `${host} was not attached. No zone in this account contains that hostname, so setup could not check for a Worker route or DNS record.`,
+        "Add the zone, then run setup again. Setup will not delete routes or DNS records.",
+      ],
+    };
+  }
+  const routes = await cf(options, "GET", `/zones/${hostZone.id}/workers/routes?per_page=100`);
+  const records = await cf(options, "GET", `/zones/${hostZone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=100`);
+  return describePublicHostAttachment(config, {
+    domains,
+    routes: Array.isArray(routes) ? routes : [],
+    records: Array.isArray(records) ? records : [],
+  });
+}
+
+async function zoneForHostname(options, host, mailZone) {
+  if (mailZone?.id && (host === mailZone.name || host.endsWith(`.${mailZone.name}`))) return mailZone;
+  const labels = host.split(".");
+  for (let i = 1; i <= labels.length - 2; i += 1) {
+    const name = labels.slice(i).join(".");
+    const zones = await cf(options, "GET", `/zones?name=${encodeURIComponent(name)}&per_page=5`);
+    const found = (Array.isArray(zones) ? zones : []).find((item) => item.name === name);
+    if (found?.id) return found;
+  }
+  return null;
+}
+
+async function ensurePublicHost(options, config, say, plan = { attach: true }) {
+  const host = customPublicHost(config);
+  if (!host || plan.attach === false) return;
+  try {
+    await ensureWorkerDomain(options, config, say, host);
   } catch (error) {
     say(`custom domain failed: ${error instanceof Error ? error.message : "request failed"}`);
-    say(`manual: Workers → ${config.workerName} → Settings → Domains & Routes → Add ${config.publicHost}.`);
+    say(`manual: Workers → ${config.workerName} → Settings → Domains & Routes → Add ${host}.`);
   }
 }
 
